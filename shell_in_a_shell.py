@@ -2,9 +2,20 @@
 # Author: Guillaume Germain
 
 
-from pycookiecheat import chrome_cookies
-import requests, readchar, pprint, time, logging, json, http.client
-import os, sys, threading
+#from pycookiecheat import chrome_cookies
+import requests, readchar, pprint, time, logging, json, http.client, http.cookiejar
+import os, sys, threading, re, urllib.parse, seas_login
+
+
+# Put your email, password and customer ID here
+email = 'ggermain@hpe.com'
+password = ''
+customer_id = 'f1c2d0e7e2dd4bec998833116c0628e9'
+serial_number = 'CP0008065'
+
+# Probably only supported for internal at the moment, no point in changing this for now
+url_suffix = 'https://internal-ui.central.arubanetworks.com/'
+
 
 
 
@@ -23,28 +34,34 @@ height, width = os.popen('stty size', 'r').read().split()
 rcs_url = ""
 rcs_session_id = ""
 
-serial_number = 'CNFYJ0T0CY'
-#serial_number = 'CP0008065'
 
 pp = pprint.PrettyPrinter(indent=4)
 
-url_suffix = 'https://internal-ui.central.arubanetworks.com/'
 url_start =  url_suffix + 'console/ssh/start/' + serial_number + '?stamp=' + str(int(round(time.time() * 1000))) 
 url_status = url_suffix + 'console/ssh/status/' + serial_number + '?stamp='
 url_token_url = '/rcs/token/'
 
 
-# Fetches cookies from Chrome
-print("Fetching Chrome cookie for " + url_suffix + " ... ", end="", flush=True)
-cookies = chrome_cookies(url_suffix)
+cookieJar = http.cookiejar.CookieJar()
+reqSession = requests.Session()
 
-if 'csrftoken' in cookies:
-    print("Success")
-else:
-    print("Failed")
-    exit()
 
-headers = {'content-type': 'application/json', 'x-requested-with': 'XMLHttpRequest', 'x-csrf-token': cookies['csrftoken'], 'referer': url_suffix + 'frontend/'}
+
+
+
+
+
+
+ 
+        
+def wasRedirected(response):
+
+    if response.history:
+        logging.debug("Request was redirected")
+        for resp in response.history:
+            logging.debug(resp.status_code, resp.url)
+
+    return response.url
 
 
 
@@ -53,7 +70,7 @@ def sendCharacter(key_hit_by_user):
 
 
     logging.debug("Sending char " + hex_to_send.upper())
-    requests.post(rcs_url + "/?", cookies=cookies, headers={'referer': rcs_url}, data={'width': width, 'height': height, 'session': rcs_session_id, 'keys': hex_to_send.upper()})
+    reqSession.post(rcs_url + "/?", cookies=cookieJar, headers={'referer': rcs_url}, data={'width': width, 'height': height, 'session': rcs_session_id, 'keys': hex_to_send.upper()})
 
     return
 
@@ -66,7 +83,7 @@ def fetchDataLoop():
     while True:
         logging.debug("[fetchDataLoop] Requesting data...")
 
-        r = requests.post(rcs_url + "/?", cookies=cookies, headers={'referer': rcs_url, 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, data={'width': width, 'height': height, 'session': rcs_session_id})
+        r = reqSession.post(rcs_url + "/?", cookies=cookieJar, headers={'referer': rcs_url, 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, data={'width': width, 'height': height, 'session': rcs_session_id})
 
         print(r.json()['data'], end="", flush=True)
         
@@ -91,10 +108,22 @@ def main_loop():
    
 
 
+# Load cookie from jar
+
+
+
+
+seas_login.loginToSite(url_suffix, reqSession, cookieJar, email, password, customer_id)
+
+coookie = reqSession.cookies.get_dict()
+
+headers = {'content-type': 'application/json', 'x-requested-with': 'XMLHttpRequest', 'referer': url_suffix + 'frontend/',  'X-CSRF-Token': coookie['csrftoken']}
+
+
 
 # Initiating initial connection to shell
 
-r = requests.post(url_start, cookies=cookies, headers=headers)
+r = reqSession.post(url_start, cookies=cookieJar, headers=headers)
 
 connection_data = r.json()
 print("Connection data output\n")
@@ -125,7 +154,7 @@ status_req['status'] = 'not started'
 while status_req['status'] != 'processed':
     time.sleep(3)
 
-    r = requests.get(url_status + str(int(round(time.time() * 1000))), cookies=cookies, headers={'content-type': 'application/json', 'referer': 'https://internal-ui.central.arubanetworks.com/frontend/'})
+    r = reqSession.get(url_status + str(int(round(time.time() * 1000))), cookies=cookieJar, headers={'content-type': 'application/json', 'referer': 'https://internal-ui.central.arubanetworks.com/frontend/'})
     
  
     status_req = r.json()
@@ -140,9 +169,8 @@ print("Connection initiated to " + connection_data['host'] + ' for device ' + se
 
 
 
-cookies = chrome_cookies('http://' + connection_data['host'] + url_token_url)
 
-r = requests.get('https://' + connection_data['host'] + url_token_url + connection_data['otc'], cookies=cookies, headers={'referer': 'https://internal-ui.central.arubanetworks.com/frontend/'}, allow_redirects=False)
+r = reqSession.get('https://' + connection_data['host'] + url_token_url + connection_data['otc'], cookies=cookieJar, headers={'referer': 'https://internal-ui.central.arubanetworks.com/frontend/'}, allow_redirects=False)
 
 rcs_url = r.headers['Location']
 
@@ -151,7 +179,7 @@ rcs_url = r.headers['Location']
 
 # Opening actual session to webserver and saving session_id
 
-r = requests.post(rcs_url + "/?", cookies=cookies, headers={'referer': rcs_url, 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, data={'width': width, 'height': height, 'rooturl': rcs_url})
+r = reqSession.post(rcs_url + "/?", cookies=cookieJar, headers={'referer': rcs_url, 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, data={'width': width, 'height': height, 'rooturl': rcs_url})
 
 rcs_session_id = r.json()['session']
 
